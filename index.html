@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>3D Train Simulator Prototype</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #e0f7fa; }
+        #ui { 
+            position: absolute; top: 10px; left: 10px; z-index: 10; 
+            background: rgba(255, 255, 255, 0.9); padding: 15px; 
+            border-radius: 8px; font-family: sans-serif; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        button { 
+            display: block; width: 100%; margin-bottom: 10px; 
+            padding: 10px; cursor: pointer; border: 1px solid #ccc; border-radius: 4px;
+            font-size: 14px;
+        }
+        .active { background-color: #4CAF50; color: white; border-color: #4CAF50; }
+        .instructions { font-size: 12px; color: #555; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <h3 style="margin-top:0;">ツール選択</h3>
+        <button id="btn-rail" class="active">🛤️ レールを敷く</button>
+        <button id="btn-train1">🚂 列車 (赤) を置く</button>
+        <button id="btn-train2">🚆 列車 (青) を置く</button>
+        <div class="instructions">
+            【操作方法】<br>
+            ・<b>レール</b>: マス目をクリックして設置<br>
+            ・<b>列車</b>: 設置済みのレールをクリックして配置<br>
+            ・<b>視点移動</b>: 右クリックで回転、スクロールで拡大縮小
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <script>
+        // 1. シーン、カメラ、レンダラーの準備
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
+        camera.position.set(0, 50, 50);
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0xe0f7fa);
+        document.body.appendChild(renderer.domElement);
+
+        // マウス操作（カメラ移動）
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+        // ライトの追加
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        directionalLight.position.set(10, 20, 10);
+        scene.add(directionalLight);
+
+        // 2. グリッドと地面の準備
+        const gridSize = 10;
+        const gridHelper = new THREE.GridHelper(100, 10);
+        scene.add(gridHelper);
+
+        const planeGeometry = new THREE.PlaneGeometry(100, 100);
+        const planeMaterial = new THREE.MeshBasicMaterial({ visible: false }); // 透明な判定用地面
+        const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+        plane.rotation.x = -Math.PI / 2;
+        scene.add(plane);
+
+        // 3. オブジェクトの定義
+        // レールのプレビュー（半透明）
+        const railGeometry = new THREE.BoxGeometry(gridSize, 1, gridSize);
+        const previewMaterial = new THREE.MeshLambertMaterial({ color: 0x888888, transparent: true, opacity: 0.5 });
+        const previewRail = new THREE.Mesh(railGeometry, previewMaterial);
+        scene.add(previewRail);
+
+        const rails = []; // 設置したレールを保存する配列
+
+        // 4. 状態管理とUI操作
+        let currentMode = 'rail'; // 'rail', 'train1', 'train2'
+        const buttons = {
+            rail: document.getElementById('btn-rail'),
+            train1: document.getElementById('btn-train1'),
+            train2: document.getElementById('btn-train2')
+        };
+
+        function setMode(mode) {
+            currentMode = mode;
+            Object.values(buttons).forEach(btn => btn.classList.remove('active'));
+            buttons[mode].classList.add('active');
+            previewRail.visible = (mode === 'rail'); // レールモード以外はプレビューを隠す
+        }
+
+        buttons.rail.addEventListener('click', () => setMode('rail'));
+        buttons.train1.addEventListener('click', () => setMode('train1'));
+        buttons.train2.addEventListener('click', () => setMode('train2'));
+
+        // 5. マウス操作とRaycaster（交差判定）
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        // マウスが動いたとき（プレビューの移動）
+        window.addEventListener('mousemove', (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            if (currentMode === 'rail') {
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObject(plane);
+                
+                if (intersects.length > 0) {
+                    // グリッドのマス目にスナップさせる計算
+                    const intersectPoint = intersects[0].point;
+                    const snapX = Math.round(intersectPoint.x / gridSize) * gridSize;
+                    const snapZ = Math.round(intersectPoint.z / gridSize) * gridSize;
+                    
+                    previewRail.position.set(snapX, 0.5, snapZ);
+                }
+            }
+        });
+
+        // クリックしたとき（設置）
+        window.addEventListener('mousedown', (event) => {
+            // UIをクリックした場合は無視
+            if(event.clientX < 200 && event.clientY < 200) return;
+
+            raycaster.setFromCamera(mouse, camera);
+
+            if (currentMode === 'rail') {
+                // レールを置く
+                const intersects = raycaster.intersectObject(plane);
+                if (intersects.length > 0) {
+                    const solidMaterial = new THREE.MeshLambertMaterial({ color: 0x555555 });
+                    const newRail = new THREE.Mesh(railGeometry, solidMaterial);
+                    newRail.position.copy(previewRail.position);
+                    scene.add(newRail);
+                    rails.push(newRail); // 列車を置くときの判定用に追加
+                }
+            } else if (currentMode.startsWith('train')) {
+                // 列車を置く（設置済みのレールの上をクリックしたか判定）
+                const intersects = raycaster.intersectObjects(rails);
+                if (intersects.length > 0) {
+                    const clickedRail = intersects[0].object;
+                    
+                    // 列車の作成
+                    const trainColor = currentMode === 'train1' ? 0xff4444 : 0x4444ff;
+                    const trainGeometry = new THREE.BoxGeometry(gridSize * 0.8, 4, gridSize * 0.4);
+                    const trainMaterial = new THREE.MeshLambertMaterial({ color: trainColor });
+                    const train = new THREE.Mesh(trainGeometry, trainMaterial);
+                    
+                    // レールの上に配置
+                    train.position.set(clickedRail.position.x, clickedRail.position.y + 2.5, clickedRail.position.z);
+                    scene.add(train);
+                }
+            }
+        });
+
+        // ウィンドウサイズ変更時の対応
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // アニメーションループ
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+</html>
